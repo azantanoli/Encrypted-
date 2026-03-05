@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Seis Privacy</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;800&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0D0618;font-family:'DM Sans',sans-serif;color:#fff;min-height:100vh}
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+@keyframes glow{0%,100%{box-shadow:0 0 18px rgba(106,13,173,0.3)}50%{box-shadow:0 0 36px rgba(106,13,173,0.6)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+input{font-family:'DM Sans',sans-serif}
+input::placeholder{color:rgba(178,130,255,0.3)}
+::-webkit-scrollbar{width:5px}
+::-webkit-scrollbar-thumb{background:rgba(138,47,201,0.35);border-radius:3px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback}=React;
+
+const rHex=n=>[...Array(n)].map(()=>Math.floor(Math.random()*16).toString(16)).join('');
+const genAddr=()=>'0x'+rHex(40);
+const WORDS=['apple','bridge','castle','dragon','eagle','forest','garden','harbor','island','jungle','kitten','lemon','mango','noble','ocean','palace','quartz','rabbit','silver','tiger','urban','valley','wisdom','xenon','yellow','zenith'];
+const genSeed=()=>[...WORDS].sort(()=>Math.random()-.5).slice(0,12);
+const calcScore=txs=>!txs.length?0:Math.round(txs.filter(t=>!t.priv).length/txs.length*100);
+const scoreInfo=s=>s<=30?{label:'Highly Private',c:'#16a34a'}:s<=70?{label:'Moderate Exposure',c:'#d97706'}:{label:'High Exposure',c:'#dc2626'};
+
+const DB={
+  get:()=>JSON.parse(localStorage.getItem('pw_acc')||'{}'),
+  save:(email,data)=>{const a=DB.get();a[email.toLowerCase()]=data;localStorage.setItem('pw_acc',JSON.stringify(a))},
+  find:email=>DB.get()[email.toLowerCase()]||null,
+  getSaved:()=>JSON.parse(localStorage.getItem('pw_saved')||'null'),
+  setSaved:email=>localStorage.setItem('pw_saved',JSON.stringify(email)),
+  clearSaved:()=>localStorage.removeItem('pw_saved'),
+};
+
+const DI={width:'100%',background:'rgba(138,47,201,0.08)',border:'1.5px solid rgba(138,47,201,0.22)',borderRadius:10,padding:'12px 14px',fontSize:'0.9rem',color:'rgba(230,210,255,0.95)',outline:'none'};
+
+function Toast({msg}){
+  if(!msg)return null;
+  return <div style={{position:'fixed',bottom:24,right:24,background:'linear-gradient(135deg,#6A0DAD,#8B2FC9)',color:'#fff',borderRadius:12,padding:'11px 20px',fontWeight:600,fontSize:'0.85rem',boxShadow:'0 8px 28px rgba(106,13,173,0.5)',zIndex:9999,animation:'fadeUp .3s ease'}}>{msg}</div>;
+}
+
+function App(){
+  const [page,setPage]=useState('landing');
+  const [user,setUser]=useState(null);
+  const [wallet,setWal]=useState(null);
+  const [txs,setTxs]=useState([]);
+  const [lastTx,setLast]=useState(null);
+  const [toast,setToast]=useState(null);
+
+  const toast$=useCallback(m=>{setToast(m);setTimeout(()=>setToast(null),2800)},[]);
+
+  useEffect(()=>{
+    const saved=DB.getSaved();
+    if(saved){const acc=DB.find(saved);if(acc){setUser({username:acc.username,email:acc.email});setWal(acc.wallet);setTxs(acc.txs||[]);setPage('dashboard');}}
+  },[]);
+
+  useEffect(()=>{
+    if(user?.email){const acc=DB.find(user.email);if(acc)DB.save(user.email,{...acc,txs,wallet});}
+  },[txs,wallet]);
+
+  const signup=({username,email,password,save})=>{
+    if(DB.find(email)){toast$('Account exists! Log in.');return;}
+    const w={address:genAddr(),seed:genSeed(),balance:1000};
+    DB.save(email,{username,email,password,wallet:w,txs:[]});
+    if(save)DB.setSaved(email);
+    setUser({username,email});setWal(w);setTxs([]);setPage('dashboard');
+    toast$(`Welcome ${username}! 🎉 Wallet ready.`);
+  };
+
+  const login=({emailOrUser,password,save})=>{
+    const acc=Object.values(DB.get()).find(a=>a.email.toLowerCase()===emailOrUser.toLowerCase()||a.username.toLowerCase()===emailOrUser.toLowerCase());
+    if(!acc){toast$('Account not found.');return;}
+    if(acc.password!==password){toast$('Wrong password.');return;}
+    if(save)DB.setSaved(acc.email);
+    setUser({username:acc.username,email:acc.email});setWal(acc.wallet);setTxs(acc.txs||[]);setPage('dashboard');
+    toast$(`Welcome back ${acc.username}! 👋`);
+  };
+
+  const importWallet=seed=>{
+    const acc=Object.values(DB.get()).find(a=>a.wallet.seed.join(' ')===seed.trim());
+    if(acc){setUser({username:acc.username,email:acc.email});setWal(acc.wallet);setTxs(acc.txs||[]);setPage('dashboard');toast$('Wallet restored! ✅');return true;}
+    toast$('Seed not found.');return false;
+  };
+
+  const logout=()=>{DB.clearSaved();setUser(null);setWal(null);setTxs([]);setLast(null);setPage('landing');toast$('Logged out.');};
+
+  const send=tx=>{
+    const nt=[tx,...txs],nw={...wallet,balance:wallet.balance-tx.amt};
+    setTxs(nt);setWal(nw);setLast(tx);
+    if(user?.email){const acc=DB.find(user.email);if(acc)DB.save(user.email,{...acc,txs:nt,wallet:nw});}
+  };
+
+  const score=calcScore(txs);
+  const {label:sLbl,c:sCol}=scoreInfo(score);
+
+  return(
+    <div style={{minHeight:'100vh',background:'#0D0618'}}>
+      {/* NAVBAR */}
+      <nav style={{background:'rgba(13,6,24,0.95)',borderBottom:'1px solid rgba(138,47,201,0.18)',padding:'0 1.2rem',height:56,display:'flex',alignItems:'center',justifyContent:'space-between',position:'sticky',top:0,zIndex:100}}>
+        <div onClick={()=>setPage(user?'dashboard':'landing')} style={{fontWeight:800,fontSize:'1rem',color:'#c4b5fd',cursor:'pointer',display:'flex',alignItems:'center',gap:8}}>
+          <span style={{background:'linear-gradient(135deg,#6A0DAD,#8B2FC9)',color:'#fff',borderRadius:7,padding:'3px 8px',fontSize:'0.65rem',fontWeight:800}}>PW</span>
+          Seis Privacy
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          {user?(
+            <>
+              <div style={{background:'rgba(106,13,173,0.15)',border:'1px solid rgba(138,47,201,0.25)',borderRadius:20,padding:'4px 12px',fontSize:'0.78rem',color:'#c4b5fd',fontWeight:600}}>
+                {user.username} · {wallet?.balance.toFixed(0)} $SEIS
+              </div>
+              <button onClick={logout} style={{background:'transparent',border:'1px solid rgba(138,47,201,0.3)',color:'rgba(196,181,253,0.7)',borderRadius:8,padding:'6px 12px',fontWeight:600,fontSize:'0.75rem',cursor:'pointer'}}>Out</button>
+            </>
+          ):(
+            <button onClick={()=>setPage('auth')} style={{background:'linear-gradient(135deg,#6A0DAD,#8B2FC9)',color:'#fff',border:'none',borderRadius:9,padding:'8px 16px',fontWeight:700,fontSize:'0.8rem',cursor:'pointer'}}>Sign Up</button>
+          )}
+        </div>
+      </nav>
+
+      {/* LANDING */}
+      {page==='landing'&&(
+        <div style={{textAlign:'center',padding:'70px 1.5rem 50px',animation:'fadeUp .5s ease'}}>
+          <div style={{display:'inline-block',background:'rgba(106,13,173,0.18)',border:'1px solid rgba(138,47,201,0.35)',borderRadius:20,padding:'5px 16px',fontSize:'0.7rem',fontWeight:700,color:'#c4b5fd',letterSpacing:'1px',marginBottom:20}}>🔐 CRYPTO PRIVACY SIMULATOR</div>
+          <h1 style={{fontSize:'clamp(1.8rem,5vw,3rem)',fontWeight:800,lineHeight:1.15,marginBottom:14,letterSpacing:'-1px'}}>
+            Welcome to<br/>
+            <span style={{background:'linear-gradient(135deg,#c4b5fd,#8B2FC9)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>Seis Privacy</span>
+          </h1>
+          <p style={{color:'rgba(200,170,255,0.6)',fontSize:'0.92rem',lineHeight:1.7,marginBottom:32,maxWidth:420,margin:'0 auto 32px'}}>Sign up once — wallet auto-created. Send $SEIS in Encrypt or Decrypt mode. Learn blockchain privacy.</p>
+          <button onClick={()=>setPage('auth')} style={{background:'linear-gradient(135deg,#6A0DAD,#8B2FC9)',color:'#fff',border:'none',borderRadius:12,padding:'14px 40px',fontWeight:800,fontSize:'0.95rem',cursor:'pointer',animation:'glow 3s ease-in-out infinite'}}>Get Started Free →</button>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:12,maxWidth:700,margin:'50px auto 0',padding:'0 1rem'}}>
+            {[['⚡','Auto Wallet','Created on signup instantly'],['🔒','Encrypt Mode','Fields show ●●●●●●'],['🔓','Decrypt Mode','All details visible'],['📊','Privacy Score','Real-time audit']].map(([ic,t,d])=>(
+              <div key={t} style={{background:'rgba(21,13,36,0.8)',border:'1px solid rgba(138,47,201,0.18)',borderRadius:14,padding:18}}>
+                <div style={{fontSize:'1.4rem',marginBottom:8}}>{ic}</div>
+                <div style={{fontWeight:700,fontSize:'0.84rem',color:'#e2d4ff',marginBottom:4}}>{t}</div>
+                <div style={{fontSize:'0.74rem',color:'rgba(180,150,230,0.5)',lineHeight:1.5}}>{d}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* AUTH */}
+      {page==='auth'&&<AuthPage onSignup={signup} onLogin={login} onImport={importWallet}/>}
+
+      {/* DASHBOARD */}
+      {page==='dashboard'&&user&&wallet&&(
+        <div style={{maxWidth:960,margin:'0 auto',padding:'24px 1.2rem',animation:'fadeUp .4s ease'}}>
+          <h2 style={{fontSize:'1.3rem',fontWeight:800,color:'#e2d4ff',marginBottom:6}}>Hey, {user.username} 👋</h2>
+          <p style={{color:'rgba(180,150,230,0.4)',fontSize:'0.8rem',marginBottom:18}}>Your wallet is loaded and ready.</p>
+          <div style={{display:'flex',gap:10,marginBottom:18,flexWrap:'wrap'}}>
+            {[['Balance',`${wallet.balance.toFixed(0)} $SEIS`,'#c4b5fd'],['Txs',txs.length,'#67e8f9'],['Score',`${score}/100`,sCol],['Status',sLbl,sCol]].map(([l,v,c])=>(
+              <div key={l} style={{background:'rgba(21,13,36,0.8)',border:'1px solid rgba(138,47,201,0.18)',borderRadius:12,padding:'11px 16px',flex:1,minWidth:100}}>
+                <div style={{fontSize:'0.63rem',color:'rgba(180,150,230,0.4)',fontWeight:700,textTransform:'uppercase',marginBottom:4}}>{l}</div>
+                <div style={{fontSize:'0.95rem',fontWeight:800,color:c}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{background:'rgba(21,13,36,0.85)',border:'1px solid rgba(138,47,201,0.2)',borderRadius:16,padding:'18px 20px',marginBottom:14}}>
+            <div style={{fontSize:'0.72rem',color:'rgba(196,181,253,0.5)',fontWeight:700,textTransform:'uppercase',marginBottom:10}}>🔑 Wallet</div>
+            <div style={{fontSize:'0.72rem',fontFamily:'monospace',color:'rgba(200,180,255,0.7)',wordBreak:'break-all',marginBottom:12}}>{wallet.address}</div>
+            <div style={{fontSize:'0.68rem',color:'rgba(180,150,230,0.4)',fontWeight:700,textTransform:'uppercase',marginBottom:8}}>🌱 Seed Phrase</div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:5}}>
+              {wallet.seed.map((w,i)=>(
+                <div key={i} style={{background:'rgba(106,13,173,0.12)',border:'1px solid rgba(138,47,201,0.18)',borderRadius:6,padding:'5px 4px',fontSize:'0.68rem',textAlign:'center',color:'#c4b5fd',fontWeight:600}}>
+                  <span style={{color:'rgba(138,47,201,0.4)',fontSize:'0.58rem'}}>{i+1}.</span>{w}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12}}>
+            {[['💸','Send Transaction','transactions'],['📊','Graph & Audit','graph'],['📜','History','history']].map(([ic,t,pg])=>(
+              <div key={t} onClick={()=>setPage(pg)} style={{background:'rgba(21,13,36,0.8)',border:'1px solid rgba(138,47,201,0.18)',borderRadius:14,padding:18,cursor:'pointer',position:'relative',overflow:'hidden'}}>
+                <div style={{position:'absolute',top:0,left:0,width:3,height:'100%',background:'linear-gradient(180deg,#6A0DAD,#8B2FC9)',borderRadius:'14px 0 0 14px'}}/>
+                <div style={{paddingLeft:8}}>
+                  <div style={{fontSize:'1.5rem',marginBottom:7}}>{ic}</div>
+                  <div style={{fontWeight:700,fontSize:'0.86rem',color:'#e2d4ff'}}>{t}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {page==='transactions'&&user&&wallet&&<TxPage wallet={wallet} txs={txs} lastTx={lastTx} onSend={send} onBack={()=>setPage('dashboard')} toast$={toast$}/>}
+      {page==='graph'&&<GraphPage txs={txs} onBack={()=>setPage('dashboard')}/>}
+      {page==='history'&&<HistoryPage txs={txs} onBack={()=>setPage('dashboard')}/>}
+      <Toast msg={toast}/>
+    </div>
+  );
+}
+
+function AuthPage({onSignup,onLogin,onImport}){
+  const [tab,setTab]=useState('signup');
+  const [f,setF]=useState({username:'',email:'',password:'',confirm:'',eu:'',lp:'',save:true,seed:''});
+  const [showPw,setShow]=useState(false);
+  const [err,setErr]=useState('');
+  const s=k=>e=>setF(p=>({...p,[k]:typeof e==='boolean'?e:e.target.value}));
+  const pwStr=f.password.length===0?0:f.password.length<6?1:f.password.length<10?2:3;
+
+  const doSignup=()=>{
+    setErr('');
+    if(!f.username.trim()||f.username.length<3){setErr('Username min 3 chars.');return;}
+    if(!f.email.includes('@')){setErr('Valid email required.');return;}
+    if(f.password.length<6){setErr('Password min 6 chars.');return;}
+    if(f.password!==f.confirm){setErr('Passwords do not match.');return;}
+    onSignup({username:f.username.trim(),email:f.email.trim(),password:f.password,save:f.save});
+  };
+  const doLogin=()=>{
+    setErr('');
+    if(!f.eu.trim()){setErr('Enter email or username.');return;}
+    if(!f.lp){setErr('Enter password.');return;}
+    onLogin({emailOrUser:f.eu.trim(),password:f.lp,save:f.save});
+  };
+  const doImport=()=>{
+    setErr('');
+    if(f.seed.trim().split(/\s+/).length!==12){setErr('Need exactly 12 words.');return;}
+    onImport(f.seed.trim());
+  };
+
+  return(
+    <div style={{minHeight:'calc(100vh - 56px)',display:'flex',alignItems:'center',justifyContent:'center',padding:'2rem',animation:'fadeUp .4s ease'}}>
+      <div style={{width:'100%',maxWidth:400}}>
+        <div style={{textAlign:'center',marginBottom:20}}>
+          <div style={{width:52,height:52,background:'linear-gradient(135deg,#6A0DAD,#8B2FC9)',borderRadius:14,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.4rem',margin:'0 auto 10px',boxShadow:'0 8px 24px rgba(106,13,173,0.45)'}}>🔐</div>
+          <h2 style={{fontSize:'1.4rem',fontWeight:800,color:'#e2d4ff'}}>{tab==='signup'?'Create Account':tab==='login'?'Welcome Back':'Import Wallet'}</h2>
+        </div>
+        <div style={{background:'rgba(21,13,36,0.92)',border:'1px solid rgba(138,47,201,0.24)',borderRadius:20,padding:'24px 20px',boxShadow:'0 20px 60px rgba(0,0,0,0.5)'}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:4,marginBottom:20,background:'rgba(106,13,173,0.1)',border:'1px solid rgba(138,47,201,0.18)',borderRadius:11,padding:4}}>
+            {[['signup','Sign Up'],['login','Log In'],['import','Import']].map(([t,l])=>(
+              <button key={t} onClick={()=>{setTab(t);setErr('');}} style={{padding:'9px 4px',borderRadius:8,border:'none',cursor:'pointer',fontFamily:'inherit',fontWeight:700,fontSize:'0.76rem',background:tab===t?'linear-gradient(135deg,#6A0DAD,#8B2FC9)':'transparent',color:tab===t?'#fff':'rgba(196,181,253,0.4)'}}>
+                {l}
+              </button>
+            ))}
+          </div>
+
+          {tab==='signup'&&(
+            <>
+              {[['Username','text','satoshi_123','username'],['Email','email','you@email.com','email']].map(([l,t,p,k])=>(
+                <div key={k} style={{marginBottom:12}}>
+                  <label style={{display:'block',fontSize:'0.7rem',fontWeight:700,color:'rgba(196,181,253,0.5)',marginBottom:5}}>{l}</label>
+                  <input type={t} placeholder={p} value={f[k]} onChange={s(k)} style={DI}/>
+                </div>
+              ))}
+              <div style={{marginBottom:12}}>
+                <label style={{display:'block',fontSize:'0.7rem',fontWeight:700,color:'rgba(196,181,253,0.5)',marginBottom:5}}>Password</label>
+                <div style={{position:'relative'}}>
+                  <input type={showPw?'text':'password'} placeholder="Min 6 chars" value={f.password} onChange={s('password')} style={DI}/>
+                  <button onClick={()=>setShow(p=>!p)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',fontSize:'0.8rem'}}>{showPw?'🙈':'👁'}</button>
+                </div>
+                {f.password.length>0&&<div style={{height:3,borderRadius:2,background:['','#dc2626','#d97706','#16a34a'][pwStr],width:['0%','33%','66%','100%'][pwStr],marginTop:5,transition:'all .3s'}}/>}
+              </div>
+              <div style={{marginBottom:14}}>
+                <label style={{display:'block',fontSize:'0.7rem',fontWeight:700,color:'rgba(196,181,253,0.5)',marginBottom:5}}>Confirm Password</label>
+                <input type={showPw?'text':'password'} placeholder="Repeat" value={f.confirm} onChange={s('confirm')} style={{...DI,borderColor:f.confirm&&f.confirm!==f.password?'rgba(220,38,38,0.5)':f.confirm===f.password&&f.confirm?'rgba(22,163,74,0.5)':DI.border}}/>
+              </div>
+              <label style={{display:'flex',alignItems:'center',gap:8,marginBottom:14,cursor:'pointer'}} onClick={()=>s('save')(!f.save)}>
+                <div style={{width:17,height:17,borderRadius:4,border:`2px solid ${f.save?'#6A0DAD':'rgba(138,47,201,0.35)'}`,background:f.save?'#6A0DAD':'transparent',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'0.65rem',color:'#fff',flexShrink:0}}>{f.save?'✓':''}</div>
+                <span style={{fontSize:'0.76rem',color:'rgba(196,181,253,0.6)'}}>Save Login</span>
+              </label>
+              {err&&<div style={{background:'rgba(220,38,38,0.1)',border:'1px solid rgba(220,38,38,0.3)',borderRadius:8,padding:'8px 12px',fontSize:'0.76rem',color:'#f87171',marginBottom:12}}>⚠ {err}</div>}
+              <button onClick={doSignup} style={{width:'100%',padding:'13px',borderRadius:12,border:'none',cursor:'pointer',background:'linear-gradient(135deg,#6A0DAD,#8B2FC9)',color:'#fff',fontFamily:'inherit',fontWeight:800,fontSize:'0.92rem',animation:'glow 3s ease-in-out infinite'}}>Create Account →</button>
+            </>
+          )}
+
+          {tab==='login'&&(
+            <>
+              <div style={{marginBottom:12}}>
+                <label style={{display:'block',fontSize:'0.7rem',fontWeight:700,color:'rgba(196,181,253,0.5)',marginBottom:5}}>Email / Username</label>
+                <input placeholder="your email or username" value={f.eu} onChange={s('eu')} style={DI}/>
+              </div>
+              <div style={{marginBottom:14}}>
+                <label style={{display:'block',fontSize:'0.7rem',fontWeight:700,color:'rgba(196,181,253,0.5)',marginBottom:5}}>Password</label>
+                <div style={{position:'relative'}}>
+                  <input type={showPw?'text':'password'} placeholder="Password" value={f.lp} onChange={s('lp')} style={DI}/>
+                  <button onClick={()=>setShow(p=>!p)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',fontSize:'0.8rem'}}>{showPw?'🙈':'👁'}</button>
+                </div>
+              </div>
+              <label style={{display:'flex',alignItems:'center',gap:8,marginBottom:14,cursor:'pointer'}} onClick={()=>s('save')(!f.save)}>
+                <div style={{width:17,height:17,borderRadius:4,border:`2px solid ${f.save?'#6A0DAD':'rgba(138,47,201,0.35)'}`,background:f.save?'#6A0DAD':'transparent',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'0.65rem',color:'#fff',flexShrink:0}}>{f.save?'✓':''}</div>
+                <span style={{fontSize:'0.76rem',color:'rgba(196,181,253,0.6)'}}>Save Login</span>
+              </label>
+              {err&&<div style={{background:'rgba(220,38,38,0.1)',border:'1px solid rgba(220,38,38,0.3)',borderRadius:8,padding:'8px 12px',fontSize:'0.76rem',color:'#f87171',marginBottom:12}}>⚠ {err}</div>}
+              <button onClick={doLogin} style={{width:'100%',padding:'13px',borderRadius:12,border:'none',cursor:'pointer',background:'linear-gradient(135deg,#6A0DAD,#8B2FC9)',color:'#fff',fontFamily:'inherit',fontWeight:800,fontSize:'0.92rem',animation:'glow 3s ease-in-out infinite'}}>Log In →</button>
+            </>
+          )}
+
+          {tab==='import'&&(
+            <>
+              <div style={{background:'rgba(106,13,173,0.1)',border:'1px solid rgba(138,47,201,0.2)',borderRadius:10,padding:'11px 13px',marginBottom:14,fontSize:'0.76rem',color:'rgba(196,181,253,0.6)',lineHeight:1.6}}>
+                💡 Enter your 12-word seed phrase to restore wallet.
+              </div>
+              <div style={{marginBottom:14}}>
+                <label style={{display:'block',fontSize:'0.7rem',fontWeight:700,color:'rgba(196,181,253,0.5)',marginBottom:5}}>12-Word Seed Phrase</label>
+                <textarea placeholder="word1 word2 word3 ..." value={f.seed} onChange={e=>setF(p=>({...p,seed:e.target.value}))} style={{...DI,minHeight:80,resize:'vertical',lineHeight:1.6}}/>
+                <div style={{fontSize:'0.65rem',color:'rgba(180,150,230,0.35)',marginTop:3}}>{f.seed.trim().split(/\s+/).filter(w=>w).length}/12 words</div>
+              </div>
+              {err&&<div style={{background:'rgba(220,38,38,0.1)',border:'1px solid rgba(220,38,38,0.3)',borderRadius:8,padding:'8px 12px',fontSize:'0.76rem',color:'#f87171',marginBottom:12}}>⚠ {err}</div>}
+              <button onClick={doImport} style={{width:'100%',padding:'13px',borderRadius:12,border:'none',cursor:'pointer',background:'linear-gradient(135deg,#6A0DAD,#8B2FC9)',color:'#fff',fontFamily:'inherit',fontWeight:800,fontSize:'0.92rem'}}>Import Wallet →</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TxPage({wallet,txs,lastTx,onSend,onBack,toast$}){
+  const [view,setView]=useState(lastTx?'result':'form');
+  const [isEnc,setEnc]=useState(true);
+  const [f,setF]=useState({to:'',amt:'',note:''});
+  const [err,setErr]=useState('');
+  const score=calcScore(txs);const{label:sLbl,c:sCol}=scoreInfo(score);
+
+  const send=()=>{
+    setErr('');
+    if(!f.to.trim()){setErr('Enter receiver address.');return;}
+    const a=parseFloat(f.amt);
+    if(!f.amt||isNaN(a)||a<=0){setErr('Valid amount required.');return;}
+    if(a>wallet.balance){setErr(`Max: ${wallet.balance.toFixed(2)} $SEIS`);return;}
+    const tx={id:'PW-'+rHex(6).toUpperCase(),from:wallet.address,to:f.to.startsWith('0x')?f.to:genAddr(),amt:a,note:f.note||'—',priv:isEnc,time:new Date().toLocaleTimeString()};
+    onSend(tx);setF({to:'',amt:'',note:''});setView('result');
+    toast$(isEnc?'🔒 Encrypted!':'🔓 Sent publicly!');
+  };
+
+  return(
+    <div style={{maxWidth:560,margin:'0 auto',padding:'24px 1.2rem',animation:'fadeUp .4s ease'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
+        <button onClick={onBack} style={{background:'transparent',border:'1px solid rgba(138,47,201,0.28)',color:'rgba(196,181,253,0.65)',borderRadius:8,padding:'6px 13px',fontWeight:600,fontSize:'0.76rem',cursor:'pointer'}}>← Back</button>
+        <div style={{display:'flex',gap:4,background:'rgba(21,13,36,0.8)',border:'1px solid rgba(138,47,201,0.18)',borderRadius:9,padding:3}}>
+          {[['form','💸 Send'],['result','📋 Result']].map(([v,l])=>(
+            <button key={v} onClick={()=>setView(v)} style={{padding:'6px 12px',borderRadius:7,border:'none',cursor:'pointer',fontFamily:'inherit',fontWeight:600,fontSize:'0.76rem',background:view===v?'linear-gradient(135deg,#6A0DAD,#8B2FC9)':'transparent',color:view===v?'#fff':'rgba(196,181,253,0.4)'}}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {view==='form'&&(
+        <div style={{background:'rgba(21,13,36,0.88)',border:'1px solid rgba(138,47,201,0.2)',borderRadius:18,padding:'22px 20px'}}>
+          <h3 style={{fontWeight:800,fontSize:'0.95rem',color:'#e2d4ff',marginBottom:14}}>New Transaction</h3>
+          <div style={{display:'flex',gap:6,marginBottom:14,background:'rgba(106,13,173,0.08)',border:'1px solid rgba(138,47,201,0.16)',borderRadius:11,padding:4}}>
+            {[['enc','🔒 Encrypt Mode',true],['dec','🔓 Decrypt Mode',false]].map(([m,l,e])=>(
+              <button key={m} onClick={()=>setEnc(e)} style={{flex:1,padding:'10px 4px',borderRadius:8,border:'none',cursor:'pointer',fontFamily:'inherit',fontWeight:700,fontSize:'0.8rem',background:isEnc===e?(e?'linear-gradient(135deg,#16a34a,#15803d)':'linear-gradient(135deg,#dc2626,#b91c1c)'):'transparent',color:isEnc===e?'#fff':'rgba(180,150,230,0.38)'}}>{l}</button>
+            ))}
+          </div>
+          <div style={{padding:'9px 12px',borderRadius:9,marginBottom:14,fontSize:'0.76rem',lineHeight:1.6,background:isEnc?'rgba(22,163,74,0.08)':'rgba(220,38,38,0.08)',border:`1px solid ${isEnc?'rgba(22,163,74,0.22)':'rgba(220,38,38,0.22)'}`,color:isEnc?'rgba(134,239,172,0.8)':'rgba(252,165,165,0.75)'}}>
+            {isEnc?'🔒 All fields hidden — observers see ●●●●●●●●':'🔓 All details visible to everyone.'}
+          </div>
+          {[['Receiver Address *','text','0x…','to'],['Amount ($SEIS) *','number',`Max ${wallet.balance.toFixed(0)}`,'amt'],['Note (optional)','text','payment for…','note']].map(([l,t,p,k])=>(
+            <div key={k} style={{marginBottom:12}}>
+              <label style={{display:'block',fontSize:'0.7rem',fontWeight:700,color:'rgba(196,181,253,0.45)',marginBottom:5}}>{l}</label>
+              <input type={t} placeholder={p} value={f[k]} onChange={e=>setF(p=>({...p,[k]:e.target.value}))} style={DI}/>
+            </div>
+          ))}
+          {err&&<div style={{background:'rgba(220,38,38,0.1)',border:'1px solid rgba(220,38,38,0.3)',borderRadius:8,padding:'8px 12px',fontSize:'0.76rem',color:'#f87171',marginBottom:12}}>⚠ {err}</div>}
+          <button onClick={send} style={{width:'100%',padding:'13px',borderRadius:12,border:'none',cursor:'pointer',background:'linear-gradient(135deg,#6A0DAD,#8B2FC9)',color:'#fff',fontFamily:'inherit',fontWeight:800,fontSize:'0.92rem',animation:'glow 3s ease-in-out infinite'}}>Send →</button>
+        </div>
+      )}
+
+      {view==='result'&&(
+        <div>
+          {!lastTx?<div style={{textAlign:'center',padding:'50px 0',color:'rgba(180,150,230,0.35)'}}>No transaction yet.</div>:(
+            <>
+              <div style={{borderRadius:18,padding:'20px',marginBottom:14,textAlign:'center',position:'relative',overflow:'hidden',background:lastTx.priv?'linear-gradient(135deg,rgba(22,163,74,0.18),rgba(21,128,61,0.08))':'linear-gradient(135deg,rgba(220,38,38,0.18),rgba(185,28,28,0.08))',border:`1.5px solid ${lastTx.priv?'rgba(22,163,74,0.38)':'rgba(220,38,38,0.38)'}`}}>
+                <div style={{position:'absolute',inset:0,background:'linear-gradient(90deg,transparent,rgba(255,255,255,0.03),transparent)',backgroundSize:'200% 100%',animation:'shimmer 2.5s infinite'}}/>
+                <div style={{fontSize:'1.8rem',marginBottom:6}}>{lastTx.priv?'🔒':'🔓'}</div>
+                <div style={{fontWeight:800,fontSize:'1.05rem',color:'#e2d4ff',marginBottom:6}}>{lastTx.priv?'Encrypt Mode — Active':'Decrypt Mode — Active'}</div>
+                <span style={{background:lastTx.priv?'rgba(22,163,74,0.18)':'rgba(220,38,38,0.18)',border:`1px solid ${lastTx.priv?'rgba(22,163,74,0.4)':'rgba(220,38,38,0.4)'}`,borderRadius:20,padding:'3px 14px',fontSize:'0.7rem',fontWeight:700,color:lastTx.priv?'#4ade80':'#f87171'}}>
+                  {lastTx.priv?'✓ ALL FIELDS ENCRYPTED':'⚡ ALL FIELDS VISIBLE'}
+                </span>
+              </div>
+              <div style={{textAlign:'center',marginBottom:12}}>
+                <span style={{background:'rgba(106,13,173,0.18)',border:'1px solid rgba(138,47,201,0.32)',borderRadius:20,padding:'4px 14px',fontSize:'0.7rem',color:'#c4b5fd',fontWeight:700,fontFamily:'monospace'}}>🔖 {lastTx.id}</span>
+              </div>
+              <div style={{background:'rgba(21,13,36,0.88)',border:'1px solid rgba(138,47,201,0.2)',borderRadius:16,padding:'16px 14px',marginBottom:12}}>
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,paddingBottom:12,borderBottom:'1px solid rgba(138,47,201,0.1)'}}>
+                  <div style={{textAlign:'center'}}>
+                    <div style={{fontSize:'1.5rem',fontWeight:800,color:sCol}}>{score}</div>
+                    <div style={{fontSize:'0.6rem',color:'rgba(180,150,230,0.4)',fontWeight:700}}>SCORE</div>
+                  </div>
+                  <div>
+                    <div style={{fontWeight:800,color:sCol,fontSize:'0.95rem'}}>{sLbl}</div>
+                    <div style={{fontSize:'0.72rem',color:'rgba(180,150,230,0.45)',lineHeight:1.5}}>{lastTx.priv?'Identity fully hidden.':'Details visible to all.'}</div>
+                  </div>
+                </div>
+                {[['From',lastTx.from.slice(0,10)+'…'],['To',lastTx.to.slice(0,10)+'…'],['Amount',`${lastTx.amt} $SEIS`],['Note',lastTx.note],['Time',lastTx.time]].map(([l,v])=>(
+                  <div key={l} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 12px',borderRadius:8,marginBottom:5,background:'rgba(138,47,201,0.07)',border:'1px solid rgba(138,47,201,0.13)'}}>
+                    <span style={{fontSize:'0.65rem',fontWeight:700,color:'rgba(200,160,255,0.5)',textTransform:'uppercase'}}>{l}</span>
+                    {lastTx.priv
+                      ?<span style={{fontFamily:'monospace',color:'#7c3aed',letterSpacing:'4px',textShadow:'0 0 10px rgba(124,58,237,0.5)'}}>{'●'.repeat(8)}</span>
+                      :<span style={{fontSize:'0.76rem',color:'rgba(225,205,255,0.9)',fontFamily:'monospace'}}>{v}</span>
+                    }
+                  </div>
+                ))}
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
+                {[{t:'Decrypt Mode',ic:'🔓',a:!lastTx.priv,c:'#f87171',b:'rgba(220,38,38,0.32)',bg:'rgba(220,38,38,0.06)',items:['Wallet Visible','Amount Visible','Open Ledger']},{t:'Encrypt Mode',ic:'🔒',a:lastTx.priv,c:'#4ade80',b:'rgba(22,163,74,0.32)',bg:'rgba(22,163,74,0.06)',items:['Wallet Hidden','Amount Encrypted','Zero Trace']}].map(card=>(
+                  <div key={card.t} style={{background:card.a?card.bg:'rgba(21,13,36,0.5)',border:`1.5px solid ${card.a?card.b:'rgba(138,47,201,0.1)'}`,borderRadius:12,padding:'11px 10px',transform:card.a?'scale(1.02)':'scale(1)'}}>
+                    <div style={{fontWeight:800,fontSize:'0.82rem',color:card.a?card.c:'rgba(180,150,230,0.25)',marginBottom:7}}>{card.ic} {card.t}</div>
+                    {card.items.map(i=><div key={i} style={{fontSize:'0.7rem',color:card.a?'rgba(215,195,255,0.7)':'rgba(180,150,230,0.22)',marginBottom:4}}>◆ {i}</div>)}
+                  </div>
+                ))}
+              </div>
+              <button onClick={()=>setView('form')} style={{width:'100%',padding:'12px',borderRadius:12,cursor:'pointer',background:'transparent',border:'1px solid rgba(138,47,201,0.28)',color:'rgba(196,181,253,0.75)',fontFamily:'inherit',fontWeight:700,fontSize:'0.84rem'}}>↺ Send Another</button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GraphPage({txs,onBack}){
+  const ref=useRef(null),anim=useRef(null);
+  const score=calcScore(txs);const{label,c}=scoreInfo(score);
+  useEffect(()=>{
+    const canvas=ref.current;if(!canvas||!txs.length)return;
+    const ctx=canvas.getContext('2d');
+    const W=canvas.width=canvas.offsetWidth||500,H=canvas.height=220;
+    const map={};
+    const node=(addr,x,y)=>{if(!map[addr])map[addr]={addr,x:x??Math.random()*(W-80)+40,y:y??Math.random()*(H-60)+30,op:0};return map[addr];};
+    const edges=txs.map((tx,i)=>{const a=(i/txs.length)*Math.PI*2,cx=W/2,cy=H/2,r=Math.min(W,H)*.26;return{from:node(tx.from,cx+r*Math.cos(a-.3),cy+r*Math.sin(a-.3)),to:node(tx.to,cx+r*Math.cos(a+.3),cy+r*Math.sin(a+.3)),priv:tx.priv,prog:0};});
+    const nodes=Object.values(map);let fr=0;
+    const draw=()=>{
+      ctx.clearRect(0,0,W,H);
+      edges.forEach(e=>{if(e.prog<1)e.prog=Math.min(1,e.prog+.02);});
+      edges.forEach((e,idx)=>{
+        const col=e.priv?'#16a34a':'#dc2626',ex=e.from.x+(e.to.x-e.from.x)*e.prog,ey=e.from.y+(e.to.y-e.from.y)*e.prog;
+        ctx.beginPath();ctx.moveTo(e.from.x,e.from.y);ctx.lineTo(ex,ey);ctx.strokeStyle=col;ctx.lineWidth=2;ctx.globalAlpha=.6;ctx.stroke();ctx.globalAlpha=1;
+        const t=(fr*.01+idx*.3)%1;ctx.beginPath();ctx.arc(e.from.x+(e.to.x-e.from.x)*t,e.from.y+(e.to.y-e.from.y)*t,3,0,Math.PI*2);ctx.fillStyle=col;ctx.fill();
+      });
+      nodes.forEach(n=>{n.op=Math.min(1,n.op+.05);ctx.globalAlpha=n.op;ctx.beginPath();ctx.arc(n.x,n.y,7,0,Math.PI*2);ctx.fillStyle='#6A0DAD';ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();ctx.globalAlpha=1;});
+      fr++;anim.current=requestAnimationFrame(draw);
+    };
+    draw();return()=>cancelAnimationFrame(anim.current);
+  },[txs]);
+
+  return(
+    <div style={{maxWidth:800,margin:'0 auto',padding:'24px 1.2rem',animation:'fadeUp .4s ease'}}>
+      <button onClick={onBack} style={{background:'transparent',border:'1px solid rgba(138,47,201,0.28)',color:'rgba(196,181,253,0.65)',borderRadius:8,padding:'6px 13px',fontWeight:600,fontSize:'0.76rem',cursor:'pointer',marginBottom:18}}>← Back</button>
+      <h2 style={{fontSize:'1.2rem',fontWeight:800,color:'#e2d4ff',marginBottom:14}}>📊 Graph & Audit</h2>
+      <div style={{background:'rgba(21,13,36,0.88)',border:'1px solid rgba(138,47,201,0.2)',borderRadius:16,padding:16,marginBottom:12}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:10,flexWrap:'wrap',gap:6}}>
+          <span style={{fontWeight:700,fontSize:'0.82rem',color:'#c4b5fd'}}>Transaction Network</span>
+          <div style={{display:'flex',gap:6}}>
+            <span style={{background:'rgba(22,163,74,0.12)',border:'1px solid rgba(22,163,74,0.4)',color:'#4ade80',borderRadius:20,padding:'2px 10px',fontSize:'0.68rem',fontWeight:700}}>🟢 Encrypt</span>
+            <span style={{background:'rgba(220,38,38,0.12)',border:'1px solid rgba(220,38,38,0.4)',color:'#f87171',borderRadius:20,padding:'2px 10px',fontSize:'0.68rem',fontWeight:700}}>🔴 Decrypt</span>
+          </div>
+        </div>
+        {!txs.length?<div style={{textAlign:'center',color:'rgba(180,150,230,0.3)',padding:'35px 0',fontSize:'0.84rem'}}>No transactions yet.</div>:<canvas ref={ref} style={{width:'100%',height:220,display:'block',borderRadius:8}}/>}
+      </div>
+      {txs.length>0&&(
+        <div style={{background:'rgba(21,13,36,0.88)',border:'1px solid rgba(138,47,201,0.2)',borderRadius:16,padding:'16px 14px'}}>
+          <div style={{fontWeight:800,fontSize:'0.9rem',color:'#e2d4ff',marginBottom:12}}>🔍 Privacy Audit</div>
+          <div style={{height:10,borderRadius:5,background:'rgba(138,47,201,0.15)',overflow:'hidden',marginBottom:6}}>
+            <div style={{height:'100%',width:`${score}%`,background:c,borderRadius:5,transition:'width .9s ease'}}/>
+          </div>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:'0.72rem',marginBottom:12}}>
+            <span style={{color:c,fontWeight:700}}>{label}</span>
+            <span style={{color:'rgba(180,150,230,0.4)'}}>Score: {score}/100</span>
+          </div>
+          {[['Total',txs.length,'rgba(210,190,255,0.8)'],['🟢 Encrypted',txs.filter(t=>t.priv).length,'#4ade80'],['🔴 Decrypted',txs.filter(t=>!t.priv).length,'#f87171'],['Total Sent',`${txs.reduce((s,t)=>s+t.amt,0)} $SEIS`,'#c4b5fd']].map(([l,v,col],i,a)=>(
+            <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',fontSize:'0.82rem',borderBottom:i<a.length-1?'1px solid rgba(138,47,201,0.1)':'none'}}>
+              <span style={{color:'rgba(180,150,230,0.55)'}}>{l}</span><strong style={{color:col}}>{v}</strong>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HistoryPage({txs,onBack}){
+  const [spy,setSpy]=useState(false);
+  return(
+    <div style={{maxWidth:800,margin:'0 auto',padding:'24px 1.2rem',animation:'fadeUp .4s ease'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
+        <button onClick={onBack} style={{background:'transparent',border:'1px solid rgba(138,47,201,0.28)',color:'rgba(196,181,253,0.65)',borderRadius:8,padding:'6px 13px',fontWeight:600,fontSize:'0.76rem',cursor:'pointer'}}>← Back</button>
+        <div style={{display:'flex',alignItems:'center',gap:7}}>
+          <span style={{fontSize:'0.72rem',color:'rgba(180,150,230,0.5)',fontWeight:600}}>👁 Spy</span>
+          <div onClick={()=>setSpy(p=>!p)} style={{width:38,height:20,borderRadius:10,background:spy?'rgba(220,38,38,0.6)':'rgba(138,47,201,0.22)',cursor:'pointer',position:'relative',border:'1px solid rgba(138,47,201,0.28)'}}>
+            <div style={{position:'absolute',top:2,left:spy?19:2,width:14,height:14,background:'#fff',borderRadius:'50%',transition:'left .2s'}}/>
+          </div>
+        </div>
+      </div>
+      <h2 style={{fontSize:'1.2rem',fontWeight:800,color:'#e2d4ff',marginBottom:14}}>📜 History</h2>
+      {spy&&<div style={{background:'rgba(220,38,38,0.08)',border:'1px solid rgba(220,38,38,0.22)',borderRadius:8,padding:'9px 13px',marginBottom:12,fontSize:'0.76rem',color:'rgba(248,113,113,0.75)'}}>🕵️ Spy View ON</div>}
+      {!txs.length?<div style={{textAlign:'center',padding:'50px 0',color:'rgba(180,150,230,0.3)',fontSize:'0.84rem'}}>No transactions yet.</div>:(
+        <div style={{background:'rgba(21,13,36,0.88)',border:'1px solid rgba(138,47,201,0.2)',borderRadius:16,overflow:'hidden'}}>
+          {txs.map(tx=>{
+            const h=spy&&tx.priv;
+            return(
+              <div key={tx.id} style={{display:'grid',gridTemplateColumns:'10px 1fr 1fr 80px 65px',gap:8,padding:'10px 16px',borderBottom:'1px solid rgba(138,47,201,0.07)',alignItems:'center'}}>
+                <div style={{width:7,height:7,borderRadius:'50%',background:tx.priv?'#16a34a':'#dc2626'}}/>
+                <div style={{fontSize:'0.7rem',fontFamily:'monospace',color:'rgba(205,185,255,0.7)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{h?<span style={{letterSpacing:'3px',color:'#7c3aed'}}>●●●●●</span>:tx.from.slice(0,8)+'…'}</div>
+                <div style={{fontSize:'0.7rem',fontFamily:'monospace',color:'rgba(205,185,255,0.7)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{h?<span style={{letterSpacing:'3px',color:'#7c3aed'}}>●●●●●</span>:tx.to.slice(0,8)+'…'}</div>
+                <div style={{fontSize:'0.74rem',fontWeight:700,color:'#c4b5fd'}}>{h?<span style={{letterSpacing:'3px',color:'#7c3aed'}}>●●●</span>:`-${tx.amt}`}</div>
+                <span style={{background:tx.priv?'rgba(22,163,74,0.1)':'rgba(220,38,38,0.1)',border:`1px solid ${tx.priv?'rgba(22,163,74,0.28)':'rgba(220,38,38,0.28)'}`,color:tx.priv?'#4ade80':'#f87171',borderRadius:20,padding:'2px 7px',fontSize:'0.65rem',fontWeight:700}}>{tx.priv?'🔒':'🔓'}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
